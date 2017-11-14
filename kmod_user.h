@@ -6,6 +6,7 @@
 
 struct shared_struct {
 	unsigned long len;
+	unsigned long off;
 };
 
 #endif

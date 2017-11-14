@@ -28,12 +28,16 @@ int main(void)
 		return -1;
 	}
 
-	mem = mmap(0, 4096, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
+	mem = mmap(0, 10000, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
 	if (mem == NULL) {
 		close(fd);
 		return -1;
 	}
 
+	snprintf(&mem[9000], 1000, "Hello world!");
+	memset(&s, 0, sizeof(struct shared_struct));
+	s.len = strlen("Hello world!");
+	s.off = 9000;
 	ioctl(fd, IOCPRINTK, &s);
 
 	pfd.fd = fd;

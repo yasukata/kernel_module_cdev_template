@@ -44,25 +44,27 @@ static int kmod_mem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	struct kmod_priv *priv = vma->vm_private_data;
 	struct page *page;
 	unsigned long off = (vma->vm_pgoff + vmf->pgoff) << PAGE_SHIFT;
-	unsigned long pa, pfn, n;
+	unsigned long pa, pfn;
 
-	off = vma->vm_pgoff << PAGE_SHIFT;
-	if (off > (priv->num_pages * PAGE_SIZE))
-		return -EINVAL;
+	printk(KERN_INFO "page fault offset %lu, page %lu\n", off, off / PAGE_SIZE);
 
-	n = (off % PAGE_SHIFT == 0) ? (off / PAGE_SIZE) : (off / PAGE_SIZE) + 1;
-
-	pa = virt_to_phys(priv->page_ptr[n] + off);
-	if (pa == 0)
+	pa = virt_to_phys(priv->page_ptr[off / PAGE_SIZE]);
+	if (pa == 0) {
+		printk(KERN_INFO "wrong pa\n");
 		return VM_FAULT_SIGBUS;
+	}
 
 	pfn = pa >> PAGE_SHIFT;
-	if (!pfn_valid(pfn))
+	if (!pfn_valid(pfn)) {
+		printk(KERN_INFO "Invalid pfn\n");
 		return VM_FAULT_SIGBUS;
+	}
 
 	page = pfn_to_page(pfn);
 	get_page(page);
 	vmf->page = page;
+
+	printk(KERN_INFO "mmap is done\n");
 
 	return 0;
 }
@@ -91,15 +93,14 @@ static long kmod_ioctl(struct file *filp, unsigned int cmd, unsigned long data)
 	struct shared_struct s;
 
 	if (copy_from_user(&s, (void *) data, sizeof(struct shared_struct)) != 0) {
-		printk(KERN_INFO "copy_from_user failed");
+		printk(KERN_INFO "copy_from_user failed\n");
 		return -EFAULT;
 	}
 
 	switch (cmd) {
 	case IOCREGMEM:
 		{
-			unsigned int i, j;
-			unsigned long num_pages;
+			unsigned int i, j, num_pages;
 			num_pages = (s.len % PAGE_SIZE == 0) ? (s.len / PAGE_SIZE) : (s.len / PAGE_SIZE) + 1;
 			priv->page_ptr = kzalloc(sizeof(char **) * num_pages, GFP_KERNEL);
 			if (priv->page_ptr == NULL)
@@ -115,14 +116,25 @@ static long kmod_ioctl(struct file *filp, unsigned int cmd, unsigned long data)
 					return -ENOMEM;
 				}
 				priv->page_ptr[i] = page_address(page);
+				printk(KERN_INFO "page %d at %p", i, priv->page_ptr[i]);
 			}
 			priv->num_pages = num_pages;
+			printk(KERN_INFO "%u pages are allocated\n", num_pages);
 		}
 		break;
 	case IOCPRINTK:
+		{
+			char *buf;
+			printk(KERN_INFO "off %lu, len %lu\n", s.off, s.len);
+			if (priv->num_pages == 0 || s.off > (priv->num_pages * PAGE_SIZE))
+				return -EINVAL;
+			buf = priv->page_ptr[s.off / PAGE_SIZE] + (s.off % PAGE_SIZE);
+			buf[s.len] = '\0';
+			printk(KERN_INFO "%s\n", buf);
+		}
 		break;
 	default:
-		printk(KERN_INFO "ioctl(): cmd is not implemented");
+		printk(KERN_INFO "ioctl(): cmd is not implemented\n");
 		break;
 	}
 

@@ -2,56 +2,68 @@
 #include <linux/module.h>
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
+#include <linux/slab.h>
+#include <linux/poll.h>
 
 #include <asm/uaccess.h>
 
 #include "kmod_user.h"
 
+struct kmod_priv {
+	wait_queue_head_t wq;
+	unsigned int num_pages;
+	char **page_ptr;
+};
+
 static int kmod_open(struct inode *inode, struct file *filp)
 {
-	struct page *p;
-	printk(KERN_INFO "open syscall is called\n");
-	p = alloc_page(GFP_ATOMIC);
-	if (p == NULL) {
+	struct kmod_priv *priv = (struct kmod_priv *) kzalloc(sizeof(struct kmod_priv), GFP_KERNEL);
+	if (priv == NULL)
 		return -ENOMEM;
-	}
-	filp->private_data = page_address(p);
-	printk("page struct at %p, page address %p", p, filp->private_data);
-	snprintf(filp->private_data, PAGE_SIZE, "Hello our kernel module!");
-	printk(KERN_INFO "open() allocates private data\n");
+	init_waitqueue_head(&priv->wq);
+	filp->private_data = (void *) priv;
+	printk(KERN_INFO "open() allocated private data\n");
 	return 0;
 }
 
 static int kmod_release(struct inode *inode, struct file *filp)
 {
-	if (filp->private_data == NULL)
-		printk(KERN_INFO "This file pointer does not have private_data\n");
-	else {
-		free_page((unsigned long) filp->private_data);
-		filp->private_data = NULL;
-		printk(KERN_INFO "release() released private data\n");
-	}
+	struct kmod_priv *priv = (struct kmod_priv *) filp->private_data;
+	unsigned int i;
+	for (i = 0; i < priv->num_pages; i++)
+		free_page((unsigned long) priv->page_ptr[i]);
+	if (priv->page_ptr)
+		kfree(priv->page_ptr);
+	kfree(priv);
+	printk(KERN_INFO "release() released private data\n");
 	return 0;
 }
 
 static int kmod_mem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
-	char *priv = vma->vm_private_data;
+	struct kmod_priv *priv = vma->vm_private_data;
 	struct page *page;
 	unsigned long off = (vma->vm_pgoff + vmf->pgoff) << PAGE_SHIFT;
-	unsigned long pa, pfn;
+	unsigned long pa, pfn, n;
 
-	printk(KERN_INFO "page fault happens, offset is %lu\n", off);
+	off = vma->vm_pgoff << PAGE_SHIFT;
+	if (off > (priv->num_pages * PAGE_SIZE))
+		return -EINVAL;
 
-	pa = virt_to_phys(priv + off);
+	n = (off % PAGE_SHIFT == 0) ? (off / PAGE_SIZE) : (off / PAGE_SIZE) + 1;
+
+	pa = virt_to_phys(priv->page_ptr[n] + off);
 	if (pa == 0)
 		return VM_FAULT_SIGBUS;
+
 	pfn = pa >> PAGE_SHIFT;
 	if (!pfn_valid(pfn))
 		return VM_FAULT_SIGBUS;
+
 	page = pfn_to_page(pfn);
 	get_page(page);
 	vmf->page = page;
+
 	return 0;
 }
 
@@ -61,14 +73,11 @@ static struct vm_operations_struct kmod_mmap_ops = {
 
 static int kmod_mmap(struct file *filp, struct vm_area_struct *vma)
 {
-	char *priv = filp->private_data;
-	unsigned long off;
+	struct kmod_priv *priv = filp->private_data;
+	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
 
-	off = vma->vm_pgoff << PAGE_SHIFT;
-	if (off > PAGE_SIZE) {
-		printk("mmap() is called for mapping %lu bytes, but we only have 4096 bytes\n", off);
+	if (off + (vma->vm_end - vma->vm_start) > (priv->num_pages * PAGE_SIZE))
 		return -EINVAL;
-	}
 
 	vma->vm_private_data = priv;
 	vma->vm_ops = &kmod_mmap_ops;
@@ -76,27 +85,54 @@ static int kmod_mmap(struct file *filp, struct vm_area_struct *vma)
 	return 0;
 }
 
-static long kmod_ioctl(struct file *filp, u_int cmd, u_long data)
+static long kmod_ioctl(struct file *filp, unsigned int cmd, unsigned long data)
 {
+	struct kmod_priv *priv = (struct kmod_priv *) filp->private_data;
 	struct shared_struct s;
-	char *mem = filp->private_data;
+
 	if (copy_from_user(&s, (void *) data, sizeof(struct shared_struct)) != 0) {
 		printk(KERN_INFO "copy_from_user failed");
 		return -EFAULT;
 	}
-	if (s.len > PAGE_SIZE) {
-		printk(KERN_INFO "specified length is bigger than 4096");
-		return -EINVAL;
-	}
-	mem[s.len] = '\0';
 
-	printk("Message from application : %s\n", mem);
+	switch (cmd) {
+	case IOCREGMEM:
+		{
+			unsigned int i, j;
+			unsigned long num_pages;
+			num_pages = (s.len % PAGE_SIZE == 0) ? (s.len / PAGE_SIZE) : (s.len / PAGE_SIZE) + 1;
+			priv->page_ptr = kzalloc(sizeof(char **) * num_pages, GFP_KERNEL);
+			if (priv->page_ptr == NULL)
+				return -ENOMEM;
+			for (i = 0; i < num_pages; i++) {
+				struct page *page = alloc_page(GFP_ATOMIC | __GFP_ZERO);
+				if (page == NULL) {
+					for (j = 0; j < i; j++) {
+						free_page((unsigned long) priv->page_ptr[j]);
+						priv->page_ptr[j] = NULL;
+					}
+					kfree(priv->page_ptr);
+					return -ENOMEM;
+				}
+				priv->page_ptr[i] = page_address(page);
+			}
+			priv->num_pages = num_pages;
+		}
+		break;
+	case IOCPRINTK:
+		break;
+	default:
+		printk(KERN_INFO "ioctl(): cmd is not implemented");
+		break;
+	}
 
 	return 0;
 }
 
 static u_int kmod_poll(struct file * filp, struct poll_table_struct *pwait)
 {
+	struct kmod_priv *priv = filp->private_data;
+	poll_wait(filp, &priv->wq, pwait);
 	return 0;
 }
 
@@ -126,11 +162,9 @@ static void __exit kmod_module_exit(void)
 {
 	misc_deregister(&kmod_cdevsw);
 	printk(KERN_INFO "Linux character device driver is unloaded\n");
-	return;
 }
 
 module_init(kmod_module_init);
 module_exit(kmod_module_exit);
 
-MODULE_DESCRIPTION("Kernel Module Template");
 MODULE_LICENSE("Dual BSD/GPL");

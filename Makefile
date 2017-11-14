@@ -1,3 +1,5 @@
+CONFIG_MODULE_SIG=n
+
 PWD := $(shell pwd)
 KDIR := /lib/modules/$(shell uname -r)/build
 

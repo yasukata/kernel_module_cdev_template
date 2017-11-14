@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/poll.h>
 
 #include "../kmod_user.h"
 
@@ -12,6 +13,7 @@ int main(void)
 	int fd;
 	char *mem = NULL;
 	struct shared_struct s;
+	struct pollfd pfd;
 
 	fd = open("/dev/kmod", O_RDWR);
 	if (fd < 0) {
@@ -19,15 +21,27 @@ int main(void)
 		return -1;
 	}
 
-	mem = mmap(0, 4096, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
-	printf("mmap() is done\n");
-	printf("Message from kernel on shared memory : %s\n", mem);
-
-	snprintf(mem, 4096, "Application overwrites shared memory.");
 	memset(&s, 0, sizeof(struct shared_struct));
-	s.len = strlen(mem);
+	s.len = 10000;
+	if (ioctl(fd, IOCREGMEM, &s) != 0) {
+		close(fd);
+		return -1;
+	}
+
+	mem = mmap(0, 4096, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
+	if (mem == NULL) {
+		close(fd);
+		return -1;
+	}
 
 	ioctl(fd, IOCPRINTK, &s);
+
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+
+	printf("Start poll, wait 2 sec\n");
+	poll(&pfd, 1, 2000);
+	printf("poll done\n");
 
 	close(fd);
 

@@ -40,3 +40,13 @@ $ ./kmod-test
 ## Other info
 
 This program is tested on Ubuntu 17.04 with Linux-4.10.
+
+### Cannot you compile this module?
+
+Do you have the header files of your Linux kernel or the kernel source itself?
+
+The following command installing the kernel header files may be able to solve the problem.
+
+```
+sudo apt-get install linux-headers-$(uname -r)
+```

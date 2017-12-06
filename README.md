@@ -11,6 +11,19 @@ This module shows how to use syscalls with a character device kernel module. Thi
 - mmap( )
 - poll( )
 
+Their implementations are registered with the file_operations struct.
+
+```
+static struct file_operations kmod_fops = {
+	.owner = THIS_MODULE,
+	.open = kmod_open,
+	.mmap = kmod_mmap,
+	.unlocked_ioctl = kmod_ioctl,
+	.poll = kmod_poll,
+	.release = kmod_release,
+};
+```
+
 ### What does the example application do?
 
 1. open( ) a special file made by this kernel module.
@@ -18,7 +31,7 @@ This module shows how to use syscalls with a character device kernel module. Thi
 1. mmap( ) asks this kernel module to map memory that is allocated by ioctl( ) to the application's address space. (Shared memory between the application and kernel)
 1. The application writes "Hello world!" to the shared memory region.
 1. ioctl( ) requests to read and print "Hello world!" written on the shared memory.
-1. poll( ) syscall waits until 2 second passes.
+1. poll( ) syscall waits for 2 second.
 
 ## How to build and test
 

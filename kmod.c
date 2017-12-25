@@ -1,5 +1,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/version.h>
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
@@ -39,8 +40,15 @@ static int kmod_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static int kmod_mem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+static int
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
+kmod_mem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
+#else
+kmod_mem_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+#endif
 	struct kmod_priv *priv = vma->vm_private_data;
 	struct page *page;
 	unsigned long off = (vma->vm_pgoff + vmf->pgoff) << PAGE_SHIFT;
